@@ -1,0 +1,4 @@
+# Same as blind.yaml + limit-switch auto-calibration.
+packages:
+  base: !include blind.yaml
+  limits: !include packages/auto_calibrate.yaml

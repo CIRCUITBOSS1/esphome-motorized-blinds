@@ -1,0 +1,68 @@
+# Optional: two limit switches (normally-open, to GND) enable true auto-calibration.
+substitutions:
+  top_limit_pin: GPIO4
+  bottom_limit_pin: GPIO5
+
+binary_sensor:
+  - platform: gpio
+    id: top_limit
+    name: "Top Limit"
+    entity_category: diagnostic
+    pin: {number: "${top_limit_pin}", mode: INPUT_PULLUP, inverted: true}
+    filters:
+      - delayed_on_off: 20ms
+
+  - platform: gpio
+    id: bottom_limit
+    name: "Bottom Limit"
+    entity_category: diagnostic
+    pin: {number: "${bottom_limit_pin}", mode: INPUT_PULLUP, inverted: true}
+    filters:
+      - delayed_on_off: 20ms
+
+script:
+  - id: auto_calibrate
+    mode: single
+    then:
+      # 1) Drive up until the top switch triggers
+      - stepper.set_target: {id: blind_stepper, target: -1000000}
+      - wait_until:
+          condition: {binary_sensor.is_on: top_limit}
+          timeout: 180s
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(blind_stepper).current_position;'
+      - if:
+          condition: {binary_sensor.is_off: top_limit}
+          then:
+            - logger.log: "Auto-calibrate aborted: top limit not reached"
+            - script.stop: auto_calibrate
+      - stepper.report_position: {id: blind_stepper, position: 0}
+      - stepper.set_target: {id: blind_stepper, target: 0}
+      # 2) Drive down until the bottom switch triggers, measure travel
+      - stepper.set_target: {id: blind_stepper, target: 1000000}
+      - wait_until:
+          condition: {binary_sensor.is_on: bottom_limit}
+          timeout: 180s
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(blind_stepper).current_position;'
+      - if:
+          condition: {binary_sensor.is_off: bottom_limit}
+          then:
+            - logger.log: "Auto-calibrate aborted: bottom limit not reached"
+            - script.stop: auto_calibrate
+      - lambda: |-
+          int cur = id(blind_stepper).current_position;
+          id(travel_steps) = cur;
+          id(saved_pos) = cur;
+      - logger.log:
+          format: "Auto-calibrate done: travel = %d steps"
+          args: ['id(travel_steps)']
+
+button:
+  - platform: template
+    name: "Auto Calibrate"
+    entity_category: config
+    on_press:
+      - script.execute: auto_calibrate

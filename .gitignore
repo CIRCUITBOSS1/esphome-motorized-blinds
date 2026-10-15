@@ -1,0 +1,5 @@
+esphome/secrets.yaml
+esphome/.esphome/
+.esphome/
+*.bin
+.venv/

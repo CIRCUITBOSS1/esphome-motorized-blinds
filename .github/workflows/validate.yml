@@ -1,0 +1,16 @@
+name: Validate ESPHome configs
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install esphome
+      - name: Validate
+        working-directory: esphome
+        run: |
+          cp secrets.example.yaml secrets.yaml
+          esphome config blind.yaml
+          esphome config blind-auto.yaml

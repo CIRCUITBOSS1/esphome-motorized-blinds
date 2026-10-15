@@ -1,0 +1,146 @@
+# Motorized blind controller - ESP32-C6 Super Mini + ULN2003 + 28BYJ-48
+# Manual calibration (Jog + Set Top / Set Bottom). No limit switches needed.
+
+substitutions:
+  name: blind-test
+  friendly_name: Test Blind
+  # ULN2003 inputs (IN1..IN4). Change if your wiring differs.
+  in1_pin: GPIO0
+  in2_pin: GPIO1
+  in3_pin: GPIO2
+  in4_pin: GPIO3
+  max_speed: 400 steps/s
+  jog_steps: "500"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: -100
+    then:
+      # Restore last known position so the blind survives reboots
+      - stepper.report_position:
+          id: blind_stepper
+          position: !lambda 'return id(saved_pos);'
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(saved_pos);'
+
+esp32:
+  board: esp32-c6-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG   # logs over the Super Mini's USB-C port
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${name}-fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+globals:
+  - id: travel_steps          # steps from fully open (0) to fully closed
+    type: int
+    restore_value: yes
+    initial_value: '20000'
+  - id: saved_pos             # last resting position, kept across reboots
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+stepper:
+  - platform: uln2003
+    id: blind_stepper
+    pin_a: ${in1_pin}
+    pin_b: ${in2_pin}
+    pin_c: ${in3_pin}
+    pin_d: ${in4_pin}
+    step_mode: HALF_STEP
+    max_speed: ${max_speed}
+    acceleration: inf
+    deceleration: inf
+    sleep_when_done: true     # coils off when idle = no heat
+
+cover:
+  - platform: template
+    name: "Blind"
+    id: blind
+    device_class: blind
+    has_position: true
+    lambda: |-
+      if (id(travel_steps) <= 0) return {};
+      float p = 1.0f - (float) id(blind_stepper).current_position / id(travel_steps);
+      return clamp(p, 0.0f, 1.0f);
+    open_action:
+      - stepper.set_target: {id: blind_stepper, target: 0}
+    close_action:
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(travel_steps);'
+    stop_action:
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(blind_stepper).current_position;'
+    position_action:
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return (1.0f - pos) * id(travel_steps);'
+
+# Save position only when the motor has stopped (protects flash wear)
+interval:
+  - interval: 2s
+    then:
+      - lambda: |-
+          int cur = id(blind_stepper).current_position;
+          if (cur == id(blind_stepper).target_position && cur != id(saved_pos)) {
+            id(saved_pos) = cur;
+          }
+
+button:
+  - platform: template
+    name: "1. Set Top Here"
+    entity_category: config
+    on_press:
+      - stepper.report_position: {id: blind_stepper, position: 0}
+      - stepper.set_target: {id: blind_stepper, target: 0}
+      - lambda: 'id(saved_pos) = 0;'
+  - platform: template
+    name: "2. Set Bottom Here"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          int cur = id(blind_stepper).current_position;
+          if (cur > 0) { id(travel_steps) = cur; id(saved_pos) = cur; }
+  - platform: template
+    name: "Jog Up"
+    entity_category: config
+    on_press:
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(blind_stepper).current_position - ${jog_steps};'
+  - platform: template
+    name: "Jog Down"
+    entity_category: config
+    on_press:
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(blind_stepper).current_position + ${jog_steps};'
+  - platform: template
+    name: "Stop"
+    on_press:
+      - stepper.set_target:
+          id: blind_stepper
+          target: !lambda 'return id(blind_stepper).current_position;'
